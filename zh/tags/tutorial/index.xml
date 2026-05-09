@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Tutorial on Mingkun'Log</title><link>https://mingkunlei.github.io/zh/tags/tutorial/</link><description>Recent content in Tutorial on Mingkun'Log</description><generator>Hugo -- 0.155.1</generator><language>zh</language><lastBuildDate>Fri, 06 Feb 2026 17:21:01 +0800</lastBuildDate><atom:link href="https://mingkunlei.github.io/zh/tags/tutorial/index.xml" rel="self" type="application/rss+xml"/><item><title>低NFE生成 | 缓存机制</title><link>https://mingkunlei.github.io/zh/posts/2026-02-06-lownfegen-cache/</link><pubDate>Fri, 06 Feb 2026 17:21:01 +0800</pubDate><guid>https://mingkunlei.github.io/zh/posts/2026-02-06-lownfegen-cache/</guid><description>&lt;p&gt;如何更快地生成出高质量的图像/视频一直是社区的核心追求。回顾早期的探索，研究者们主要致力于从数值分析的视角构建高效的 ODE Solver（如我们熟知的 DDIM&lt;sup id="fnref:1"&gt;&lt;a href="#fn:1" class="footnote-ref" role="doc-noteref"&gt;1&lt;/a&gt;&lt;/sup&gt;, DPM-Solver&lt;sup id="fnref:2"&gt;&lt;a href="#fn:2" class="footnote-ref" role="doc-noteref"&gt;2&lt;/a&gt;&lt;/sup&gt;, iPNDM&lt;sup id="fnref:3"&gt;&lt;a href="#fn:3" class="footnote-ref" role="doc-noteref"&gt;3&lt;/a&gt;&lt;/sup&gt;），试图在数学上用更少的步数逼近真实分布。与此同时，蒸馏（Distillation） 也是立竿见影的手段。而在 &lt;a href="https://github.com/black-forest-labs/flux"&gt;FLUX&lt;/a&gt;/&lt;a href="https://github.com/Wan-Video/Wan2.1"&gt;Wan&lt;/a&gt; 等大模型时代，缓存（Cache）机制凭借其免训练（Training-Free）和即插即用（Plug-and-Play）的特性，迅速占据了一席之地。
+当然，量化、分布式推理等手段也在百花齐放。但万变不离其宗，我们追求的终极目标始终是 效率与质量的平衡。&lt;/p&gt;
+&lt;p&gt;本文将聚焦于缓存（Cache）机制展开深度讨论。但我并不打算简单地罗列论文综述，而是想分享在进行相关研究时，对于这一领域评估标准与演进脉络的复盘与反思。
+当我们打开一篇缓存相关的论文，最先映入眼帘的往往是两类指标：质量（Visual Quality）与效率（Efficiency）。
+关于质量，我们有 CLIP Score, ImageReward, VBench 等常用指标，Cache研究还会额外关注重建指标（PSNR/LPIPS）。然而，关于“效率”的定义，社区中却存在着某种“隐性的模糊”。
+最常见的指标是 延迟（Latency）和加速比（Speedup）。这两个指标固然直观，但它们本质上是相对概念：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;硬件依赖性： 同样的算法，在H100和A100上，甚至在不同的负载和显存状态下，延迟差异巨大。&lt;/li&gt;
+&lt;li&gt;基线的不透明： 加速比是一个极易被“基线设定（即num inference steps的实际设置，通常我们可以简单认为是Ground Truth）”操控的相对指标。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;让我们来看一个简单的算术题。假设我们的目标是生成一张质量达标的图：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Case A: inference steps使用了50步。通过Cache，实际只计算了10步（跳过了40步）。
+Speedup=50/10=5.0×&lt;/li&gt;
+&lt;li&gt;Case B: inference steps只用了30步（对于FLUX而言是足够的）。通过Cache同样只计算了10步（跳过了20 步）。
+Speedup=30/10=3.0×&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;乍一看，Case A(5.0x)似乎比Case B(3.0x)厉害得多，是一项“重大突破”。但当我们剥离掉基线设定的干扰，回归到计算本质时，我们会发现：两者都需要 10 次网络推理，实际的推理延迟是几乎一样的。并且实际上二者得图像质量并不会有实质性的差异。
+因此，我认为衡量Step-Level Cache最诚实、最硬核的指标，应该是NFE(Number of Function Evaluations)，即Denoising Network实际完整运行的次数。这是一个绝对数值，它剥离了硬件和基线的干扰，直指计算成本的核心，同时也被ODE Solver相关研究广泛运用。&lt;/p&gt;
+&lt;figure&gt;
+&lt;img loading="lazy" src="https://mingkunlei.github.io/zh/posts/2026-02-06-lownfegen-cache/deepcache.png"
+alt="Figure 1. DeepCache overview."/&gt;&lt;figcaption&gt;
+&lt;p&gt;Figure 1. DeepCache overview.&lt;/p&gt;
+&lt;/figcaption&gt;
+&lt;/figure&gt;
+&lt;p&gt;在厘清了评估指标之后，我们不妨简单回顾下Cache技术的发展脉络。如果我们将生成过程视为特征在时间轴上的流动与演变，那么冗余其实广泛存在于不同的粒度之中。早期的探索主要集中在模型架构内部的冗余。作为缓存机制的先行者，DeepCache&lt;sup id="fnref:4"&gt;&lt;a href="#fn:4" class="footnote-ref" role="doc-noteref"&gt;4&lt;/a&gt;&lt;/sup&gt; 与针对 DiT 架构的 Delta-DiT&lt;sup id="fnref:5"&gt;&lt;a href="#fn:5" class="footnote-ref" role="doc-noteref"&gt;5&lt;/a&gt;&lt;/sup&gt; 敏锐地捕捉到了特征演化的规律：深层语义特征在相邻时间步间的变化极其缓慢，而浅层特征变化较快。基于此，我们可以选择性地跳过某些深层 Block 的计算，直接复用上一时刻的 Feature Map，从而让网络变得“更薄”。而随着 DiT 架构的普及，研究者的目光进一步聚焦到了更细粒度的 Token-Level，以 ToCa&lt;sup id="fnref:6"&gt;&lt;a href="#fn:6" class="footnote-ref" role="doc-noteref"&gt;6&lt;/a&gt;&lt;/sup&gt; 和 DuCa&lt;sup id="fnref:7"&gt;&lt;a href="#fn:7" class="footnote-ref" role="doc-noteref"&gt;7&lt;/a&gt;&lt;/sup&gt; 为代表。通过剪枝（Pruning）或合并（Merging）判定的冗余 Token，可以显著减少 Attention 的计算量。值得注意的是，无论是 Layer-Level 还是 Token-Level，本质上都是在单次推理内部做减法（减少 FLOPs），网络运行的总步数并没有改变，自然NFE在这里并不是一个适用的衡量指标。&lt;/p&gt;</description></item></channel></rss>
